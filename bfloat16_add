@@ -1,0 +1,147 @@
+
+#include "bfloat16_add.h"
+
+
+unpacked_float bfloat16_add(unpacked_float A, unpacked_float B)
+{
+  unpacked_float result;
+  bool is_zero       = 0;
+  bool is_inf        = 0;
+  bool is_special    = 0;
+  bool is_ovf_unf    = 0;
+  bool is_A_bigger_B = 0;
+  bool is_sign_diff  = 0;
+
+  unsigned int exponent_diff    = 0;
+  unsigned int mantissa_align_A = 0;
+  unsigned int mantissa_align_B = 0;
+ 
+  unsigned int unnormalized_exponent = 0;
+  unsigned int normalized_exponent   = 0;
+  unsigned int unnormalized_mantissa = 0;
+  unsigned int normalized_mantissa   = 0;
+
+  int normalize_iter = 0;
+
+  //Check special case
+  //Zero
+  if( ((A.bfloat16.exponent == 0) && (A.bfloat16.mantissa == 0)))
+  {
+    result.bfloat16.exponent = B.bfloat16.exponent;
+    result.bfloat16.mantissa = B.bfloat16.mantissa;
+    is_zero = 1;
+  }
+   if(((B.bfloat16.exponent == 0) && (B.bfloat16.mantissa == 0)) )
+  {
+    result.bfloat16.exponent = A.bfloat16.exponent;
+    result.bfloat16.mantissa = A.bfloat16.mantissa;
+    is_zero = 1;
+  }
+  //Inf
+  if( ((A.bfloat16.exponent == 255) && (A.bfloat16.mantissa == 0)) || ((B.bfloat16.exponent == 255) && (B.bfloat16.mantissa == 0)) )
+  {
+    result.bfloat16.exponent = 255;
+    result.bfloat16.mantissa = 0;
+    is_special = 1;
+    is_inf     = 1;
+  }
+  //NaN
+  if( !is_inf && (((A.bfloat16.exponent == 255) ) || ((B.bfloat16.exponent == 255))) )
+  {
+    result.bfloat16.exponent = 255;
+    result.bfloat16.mantissa = 1;
+    is_special = 1;
+  }
+  //A + B=0
+  if(((B.bfloat16.exponent == A.bfloat16.exponent) && (B.bfloat16.mantissa == A.bfloat16.mantissa))&& (B.bfloat16.sign != A.bfloat16.sign) )
+  {
+    result.bfloat16.exponent = 0;
+    result.bfloat16.mantissa = 0;
+    is_special = 1;
+  }
+
+
+  //Non-special case 
+  if((is_special==0) && (is_zero==0) )
+  {
+  //Compare bigger
+    if(A.bfloat16.exponent > B.bfloat16.exponent)
+    {
+      is_A_bigger_B = 1;
+      exponent_diff = A.bfloat16.exponent -B.bfloat16.exponent;
+    } 
+    else
+    {
+      is_A_bigger_B = 0;
+      exponent_diff = B.bfloat16.exponent -A.bfloat16.exponent;
+    }
+  //Compute sign 
+    result.bfloat16.sign =  is_A_bigger_B ? A.bfloat16.sign : B.bfloat16.sign;
+    is_sign_diff         =  A.bfloat16.sign ^ B.bfloat16.sign;
+
+  //Compute unnormalized exponent
+    unnormalized_exponent = is_A_bigger_B ? A.bfloat16.exponent : B.bfloat16.exponent;
+  //Compute unnormalized exponent
+    mantissa_align_A = is_A_bigger_B ? (A.bfloat16.mantissa | 0x00000080): ((A.bfloat16.mantissa | 0x00000080)>>exponent_diff);
+    mantissa_align_B = is_A_bigger_B ? ((B.bfloat16.mantissa | 0x00000080)>>exponent_diff): (B.bfloat16.mantissa | 0x00000080);
+    unnormalized_mantissa = (is_sign_diff & is_A_bigger_B) ? mantissa_align_A-mantissa_align_B: mantissa_align_A + mantissa_align_B;
+    if(is_sign_diff)
+    {
+        if(is_A_bigger_B) unnormalized_mantissa = mantissa_align_A - mantissa_align_B;
+        else              unnormalized_mantissa = mantissa_align_B - mantissa_align_A;
+    }
+    else
+    {
+        unnormalized_mantissa = mantissa_align_A + mantissa_align_B;
+    }
+  }
+
+  //Normalize result
+  normalized_exponent = unnormalized_exponent;
+  normalized_mantissa = unnormalized_mantissa;
+  while (normalize_iter<8)
+  {
+    //10.1xxxx ... Right shift
+    if((normalized_mantissa & 0x00000100))
+    {
+      normalized_exponent= normalized_exponent + 1;
+      normalized_mantissa= normalized_mantissa >> 1;
+    }
+    //0.001xxx.... Left shift
+    else if( !(normalized_mantissa & 0x00000080))
+    {
+      normalized_exponent= normalized_exponent - 1;
+      normalized_mantissa= normalized_mantissa << 1;
+    }
+    //Normalize done
+    else if ((normalized_mantissa & 0x00000080))
+    {
+      break;
+    }
+    normalize_iter++;
+  }
+  //Check result
+  //Overflow
+  if((!is_special &&!is_zero ) && (normalized_exponent > 254))
+  {
+    result.bfloat16.exponent = 254;
+    result.bfloat16.mantissa = 127;
+    is_ovf_unf = 1;
+  }
+  //Underflow
+  if((!is_special &&!is_zero ) && (normalized_exponent < 1))
+  {
+    result.bfloat16.exponent = 1;
+    result.bfloat16.mantissa = 0;
+    is_ovf_unf = 1;
+  }
+  
+  //Take result except special case
+  if(!is_ovf_unf && !is_special &&!is_zero)
+  {
+    result.bfloat16.exponent = normalized_exponent;
+    result.bfloat16.mantissa = (normalized_mantissa);
+  }
+  return result;
+
+}
